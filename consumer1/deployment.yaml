@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consumer
+  namespace: consumer1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: volumes
+  template:
+    metadata:
+      name: volumes
+      labels:
+        app: volumes
+    spec:
+      volumes:
+        - name: preload
+          persistentVolumeClaim:
+            claimName: preload
+        - name: overlay
+          emptyDir: {}
+        - name: extbin
+          emptyDir: {}
+      containers:
+        - name: setup
+          image: alpine:3
+          securityContext:
+            privileged: true
+          command: [ "/bin/sh", "-c", "--" ]
+          args:
+          - mkdir -p /data/upper;
+            mkdir -p /data/work;
+            mount -t overlay -o lowerdir=/preload/,upperdir=/data/upper,workdir=/data/work overlay /extbin; 
+            touch /extbin/preload_mounted.fin; 
+            tail -f /dev/null;
+          volumeMounts:
+          - mountPath: /preload
+            name: preload
+            # readOnly: true
+          - mountPath: /data
+            name: overlay
+          - mountPath: /extbin
+            name: extbin
+            mountPropagation: Bidirectional
+          lifecycle:
+            preStop:
+              exec:
+                command: ["umount", "/extbin"]
+        - name: run
+          image: >-
+            nginx:alpine
+          volumeMounts:
+          - mountPath: /extbin
+            name: extbin
+          ports:
+            - name: volumes
+              containerPort: 80
+              protocol: TCP
+          imagePullPolicy: IfNotPresent
+          startupProbe:
+            httpGet:
+              path: /
+              port: 80
+              scheme: HTTP
+            initialDelaySeconds: 1
+            timeoutSeconds: 1
+            periodSeconds: 2
+            successThreshold: 1
+            failureThreshold: 15
+          readinessProbe:
+            exec:
+              command:
+              - cat
+              - /extbin/preload_mounted.fin
+            initialDelaySeconds: 0
+            periodSeconds: 1
+            failureThreshold: 300
